@@ -1,0 +1,93 @@
+======================================================================
+LAB 2: COMPILER HARDENING FLAGS AND UBSAN/ASAN DIAGNOSTICS REPORT
+======================================================================
+
+OVERVIEW:
+This document captures the compiler outputs, warnings, and runtime diagnostics 
+when compiling and executing the type-conversion program under four distinct 
+security and sanitization configurations.
+
+----------------------------------------------------------------------
+CONFIGURATION 1: No Flags (Default Compilation)
+----------------------------------------------------------------------
+Command run:
+  gcc type_conversion.c -o type_conv_c1
+
+Compiler Output:
+  (No output / Silent compilation)
+
+Runtime Diagnostics & Output:
+  === UNSAFE CONVERSIONS (Vulnerable) ===
+  [Int -> Short] Original int: 70000 | Converted short: -31072 (Overflow/Truncation)
+  [Signed -> Unsigned] Original: -15 | Converted unsigned: 4294967281 (Sign bit error)
+  [Float -> Int] Original float: 3.402824e+38 | Converted int: -2147483648 (Overflow)
+  [String -> Numeric] Input string: "999999999999999" | atoi result: 2147483647 (Silent overflow)
+
+Defects Caught / Missed:
+  - Missed: 100% of truncation, sign misinterpretation, integer overflow, and undefined float-to-int conversions.
+  - Reason: Default compilation performs no semantic or bounds checking on standard type casts.
+
+
+----------------------------------------------------------------------
+CONFIGURATION 2: With -Wall -Wextra (Warning Flags)
+----------------------------------------------------------------------
+Command run:
+  gcc -Wall -Wextra type_conversion.c -o type_conv_c2
+
+Compiler Output:
+  type_conversion.c: In function 'run_unsafe_conversions':
+  type_conversion.c:16:47: warning: implicit conversion from 'signed int' to 'unsigned int' changes value from -15 to 4294967281 [-Wsign-conversion]
+  type_conversion.c:21:43: warning: float overflow in conversion [-Woverflow]
+
+Runtime Diagnostics & Output:
+  (Same as Configuration 1 execution output, as warnings do not stop binary generation).
+
+Defects Caught / Missed:
+  - Caught at Compile-Time: Sign conversion (`-Wsign-conversion`) and static float overflow (`-Woverflow`).
+  - Missed at Runtime: Dynamic runtime integer overflows (like `70000` to `short`) and unsafe `atoi` string conversions because values depend on runtime/input logic.
+
+
+----------------------------------------------------------------------
+CONFIGURATION 3: With -fsanitize=undefined (UBSan) & ASan
+----------------------------------------------------------------------
+Command run:
+  gcc -fsanitize=address,undefined -g type_conversion.c -o type_conv_c3
+  ./type_conv_c3
+
+Compiler Output:
+  (Clean compilation, instrumentation added).
+
+Runtime Diagnostics & Output:
+  === UNSAFE CONVERSIONS (Vulnerable) ===
+  [Int -> Short] Original int: 70000 | Converted short: -31072 (Overflow/Truncation)
+  type_conversion.c:12:30: runtime error: implicit conversion from type 'int' of value 70000 (32-bit, signed) to type 'short' changed the value to -31072 (16-bit, signed)
+  [Signed -> Unsigned] Original: -15 | Converted unsigned: 4294967281 (Sign bit error)
+  [Float -> Int] Original float: 3.402824e+38 | Converted int: -2147483648 (Overflow)
+  type_conversion.c:21:43: runtime error: float 3.4028235e+38 cannot be represented in type 'int'
+  ...
+
+Defects Caught / Missed:
+  - Caught at Runtime: Undefined behavior and implicit type conversion truncations / float-to-int overflows are caught immediately with precise line numbers and diagnostic descriptions.
+  - Missed: Logical range errors in unchecked `atoi` calls that fit within standard integer bounds (since `atoi` returning a wrapped value doesn't violate hardware integer arithmetic rules on its own).
+
+
+----------------------------------------------------------------------
+CONFIGURATION 4: With -fsanitize=address (ASan) Only
+----------------------------------------------------------------------
+Command run:
+  gcc -fsanitize=address -g type_conversion.c -o type_conv_c4
+  ./type_conv_c4
+
+Compiler Output:
+  (Clean compilation with memory sanitizer instrumentation).
+
+Runtime Diagnostics & Output:
+  === UNSAFE CONVERSIONS (Vulnerable) ===
+  [Int -> Short] Original int: 70000 | Converted short: -31072
+  [Signed -> Unsigned] Original: -15 | Converted unsigned: 4294967281
+  ... (Program runs successfully without memory errors).
+
+Defects Caught / Missed:
+  - Caught at Runtime: Out-of-bounds heap/stack buffer overflows, use-after-free, and double-free errors.
+  - Missed: Data type conversion truncations and integer overflow issues. 
+  - Reason: ASan specifically targets spatial memory safety (bounds checking), not numeric or type conversion semantics (which are handled by UBSan).
